@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Chess & Shogi Engine</title>
+
+<style>
+:root{
+  --bg:#0a0f1f;
+  --panel:#11162a;
+  --neon:#00f6ff;
+  --danger:#ff3355;
+  --text:#e6f1ff;
+}
+*{box-sizing:border-box;font-family:system-ui,-apple-system,Segoe UI;}
+body{
+  margin:0;
+  background:radial-gradient(circle at top,var(--panel),var(--bg));
+  color:var(--text);
+  overflow:hidden;
+}
+button{
+  background:linear-gradient(135deg,var(--neon),#0077ff);
+  border:none;
+  border-radius:10px;
+  padding:12px 18px;
+  font-weight:700;
+  color:#000;
+}
+button:active{transform:scale(.95)}
+#menu,#howto{
+  position:fixed;inset:0;
+  background:rgba(0,0,0,.85);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  z-index:50;
+}
+.panel{
+  background:var(--panel);
+  border-radius:18px;
+  padding:22px;
+  width:92%;
+  max-width:420px;
+  box-shadow:0 0 30px #000;
+}
+h1{text-align:center;color:var(--neon);}
+.menu-btn{width:100%;margin:10px 0;font-size:18px}
+.hidden{display:none}
+
+/* GAME UI */
+#game{
+  display:flex;
+  flex-direction:column;
+  height:100vh;
+}
+.topbar{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  padding:8px 12px;
+}
+.timer{
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+.avatar{
+  width:36px;height:36px;border-radius:50%;
+  position:relative;
+  overflow:hidden;
+}
+.board-wrap{
+  flex:1;
+  display:flex;
+  justify-content:center;
+  align-items:center;
+}
+#board{
+  display:grid;
+  background:#000;
+  border-radius:14px;
+  overflow:hidden;
+}
+.cell{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-size:22px;
+  position:relative;
+}
+.cell.dark{background:#1a223a}
+.cell.light{background:#2a345a}
+.cell.highlight{box-shadow:inset 0 0 0 3px var(--neon)}
+.piece{
+  transition:transform .3s ease-out,opacity .3s;
+  cursor:pointer;
+}
+.captured{
+  opacity:0;
+  transform:scale(.3);
+}
+.flash{
+  animation:flash .3s;
+}
+@keyframes flash{
+  0%{background:var(--danger)}
+  100%{}
+}
+
+/* HOW TO */
+.tabs{display:flex;gap:6px}
+.tab{
+  flex:1;padding:8px;
+  background:#222;border-radius:8px;
+  text-align:center;
+}
+.tab.active{background:var(--neon);color:#000}
+.how-body{margin-top:12px;font-size:14px}
+</style>
+</head>
+
+<body>
+
+<!-- MAIN MENU -->
+<div id="menu">
+  <div class="panel">
+    <h1>♟ Chess & Shogi</h1>
+    <button class="menu-btn" onclick="startGame()">Play Local</button>
+    <button class="menu-btn" onclick="openHow()">How to Play</button>
+  </div>
+</div>
+
+<!-- HOW TO PLAY -->
+<div id="howto" class="hidden">
+  <div class="panel">
+    <div class="tabs">
+      <div class="tab active" onclick="showTab(0)">Chess</div>
+      <div class="tab" onclick="showTab(1)">Shogi</div>
+    </div>
+    <div class="how-body" id="howText"></div>
+    <button class="menu-btn" onclick="closeHow()">Close</button>
+  </div>
+</div>
+
+<!-- GAME -->
+<div id="game" class="hidden">
+  <div class="topbar">
+    <div class="timer">
+      <div id="av1" class="avatar"></div>
+      <span id="t1">10:00</span>
+    </div>
+    <button onclick="toggleMode()">Mode</button>
+    <div class="timer">
+      <span id="t2">10:00</span>
+      <div id="av2" class="avatar"></div>
+    </div>
+  </div>
+
+  <div class="board-wrap">
+    <div id="board"></div>
+  </div>
+</div>
+
+<script>
+/* ======================
+   AUDIO
+====================== */
+const audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+function beep(freq=.6,dur=.1){
+  const o=audioCtx.createOscillator();
+  const g=audioCtx.createGain();
+  o.frequency.value=600*freq;
+  o.connect(g);g.connect(audioCtx.destination);
+  o.start();
+  g.gain.exponentialRampToValueAtTime(.0001,audioCtx.currentTime+dur);
+  o.stop(audioCtx.currentTime+dur);
+}
+
+/* ======================
+   CHIBI AVATAR
+====================== */
+function drawChibi(el,seed){
+  const colors=["#00f6ff","#ff3355","#22ff88"];
+  el.style.background=colors[seed%3];
+  el.innerHTML=`<div style="position:absolute;inset:8px;background:#000;border-radius:50%"></div>`;
+}
+
+/* ======================
+   GAME STATE
+====================== */
+let mode="chess";
+let size=8;
+let board=[];
+let turn=0;
+let selected=null;
+
+const chessPieces={
+  r:"♜",n:"♞",b:"♝",q:"♛",k:"♚",p:"♟",
+  R:"♖",N:"♘",B:"♗",Q:"♕",K:"♔",P:"♙"
+};
+
+/* ======================
+   INIT
+====================== */
+function startGame(){
+  menu.classList.add("hidden");
+  game.classList.remove("hidden");
+  drawChibi(av1,1);
+  drawChibi(av2,2);
+  initBoard();
+}
+function toggleMode(){
+  mode=mode==="chess"?"shogi":"chess";
+  initBoard();
+}
+
+/* ======================
+   BOARD SETUP
+====================== */
+function initBoard(){
+  size=mode==="chess"?8:9;
+  board=[];
+  boardEl.innerHTML="";
+  boardEl.style.gridTemplateColumns=`repeat(${size},1fr)`;
+  boardEl.style.width=Math.min(innerWidth,innerHeight-120)+"px";
+  boardEl.style.height=boardEl.style.width;
+
+  for(let y=0;y<size;y++){
+    board[y]=[];
+    for(let x=0;x<size;x++){
+      board[y][x]=null;
+      const c=document.createElement("div");
+      c.className="cell "+((x+y)%2?"dark":"light");
+      c.onclick=()=>onCell(x,y,c);
+      boardEl.appendChild(c);
+    }
+  }
+
+  if(mode==="chess") setupChess();
+}
+
+/* ======================
+   CHESS SETUP
+====================== */
+function setupChess(){
+  const back="rnbqkbnr";
+  for(let i=0;i<8;i++){
+    place(back[i],i,0);
+    place("p",i,1);
+    place("P",i,6);
+    place(back[i].toUpperCase(),i,7);
+  }
+}
+
+/* ======================
+   PLACE PIECE
+====================== */
+function place(p,x,y){
+  board[y][x]=p;
+  const idx=y*size+x;
+  const cell=boardEl.children[idx];
+  cell.innerHTML=`<div class="piece">${chessPieces[p]||"歩"}</div>`;
+}
+
+/* ======================
+   INPUT
+====================== */
+function onCell(x,y,cell){
+  const p=board[y][x];
+  if(selected){
+    move(selected.x,selected.y,x,y);
+    selected=null;
+    clearHighlights();
+    return;
+  }
+  if(p){
+    selected={x,y};
+    cell.classList.add("highlight");
+  }
+}
+function clearHighlights(){
+  document.querySelectorAll(".cell").forEach(c=>c.classList.remove("highlight"));
+}
+
+/* ======================
+   MOVE
+====================== */
+function move(x1,y1,x2,y2){
+  const p=board[y1][x1];
+  if(!p) return;
+  const target=board[y2][x2];
+  if(target){
+    beep(.3,.15);
+    boardEl.children[y2*size+x2].classList.add("flash");
+  }else{
+    beep();
+  }
+  board[y1][x1]=null;
+  board[y2][x2]=p;
+  render();
+  turn^=1;
+}
+
+/* ======================
+   RENDER
+====================== */
+function render(){
+  for(let y=0;y<size;y++){
+    for(let x=0;x<size;x++){
+      const cell=boardEl.children[y*size+x];
+      cell.innerHTML=board[y][x]
+        ? `<div class="piece">${chessPieces[board[y][x]]||"歩"}</div>`
+        : "";
+    }
+  }
+}
+
+/* ======================
+   HOW TO
+====================== */
+const howText=document.getElementById("howText");
+function openHow(){
+  howto.classList.remove("hidden");
+  showTab(0);
+}
+function closeHow(){
+  howto.classList.add("hidden");
+}
+function showTab(i){
+  document.querySelectorAll(".tab").forEach((t,idx)=>t.classList.toggle("active",idx===i));
+  howText.innerHTML=i===0
+    ? `<b>Chess</b><br>Castling, En Passant, Checkmate.<br>Pawns promote on last rank.`
+    : `<b>Shogi</b><br>Captured pieces return to play.<br>Promotion in last 3 ranks.`;
+}
+
+const boardEl=document.getElementById("board");
+</script>
+</body>
+</html>
